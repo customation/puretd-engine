@@ -92,7 +92,7 @@ jobs:
       - name: Check out the protocol
         uses: actions/checkout@v4
         with:
-          repository: customation/bep
+          repository: customation/backgammon-engine-protocol
           path: bep
 
       - uses: dtolnay/rust-toolchain@stable
