@@ -35,6 +35,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: customation/backgammon-ai-engine
+          # Our branch, not the fork's master: master stays a clean mirror of
+          # upstream so pulling Alexander's changes is a fast-forward, and our
+          # parity gate lives beside it rather than in it.
+          ref: customation/parity-gate
           path: puretd
 
       - uses: actions/setup-python@v5
@@ -87,6 +91,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: customation/backgammon-ai-engine
+          ref: customation/parity-gate
           path: backgammon-ai-engine
 
       - name: Check out the protocol
