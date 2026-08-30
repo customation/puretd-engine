@@ -1,0 +1,23 @@
+[package]
+name = "puretd-engine"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "PureTD as a Backgammon Engine Protocol engine: JSON-RPC over stdio, no Python at runtime"
+
+# The binary is what ships. `bep-protocol` brings the contract types, the
+# GnuBG id codecs and the stdio framing; the neural net and the move generator
+# are Alexander Strehl's C, compiled in by build.rs. Nothing else is needed —
+# the whole engine is this plus a weights file.
+[dependencies]
+bep-protocol = { path = "../bep/protocol-rs" }
+serde_json = "1"
+
+[build-dependencies]
+cc = "1"
+
+[profile.release]
+# The pack budget is single-digit megabytes and this binary is a rounding error
+# next to the weights, but a stripped LTO build keeps it that way.
+lto = true
+strip = true
