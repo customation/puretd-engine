@@ -20,6 +20,11 @@ on:
   workflow_dispatch:
 
 env:
+  # Must match the site's ObjectStorage config.
+  S3_ENDPOINT: https://s3.fr-par.scw.cloud
+  S3_BUCKET: gammonbase-assets-prod
+  # EngineCatalogueService composes the catalogue from exactly this prefix.
+  ENGINES_PREFIX: engines
   ENGINE_ID: puretd
   # The prob5 network: five outputs, which is what the protocol's
   # win/gammon/backgammon fields need. The cubeful model emits one equity
@@ -180,3 +185,68 @@ jobs:
         with:
           name: puretd-${{ matrix.target }}
           path: engine/release
+
+  publish:
+    name: Publish PureTD to object storage
+    needs: pack
+    runs-on: ubuntu-latest
+    # Only from master, and never from a pull request: a fork's PR must not be
+    # able to write to the release bucket.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect every platform's release
+        uses: actions/download-artifact@v4
+        with:
+          pattern: puretd-*
+          path: incoming
+          merge-multiple: true
+
+      # Skipped rather than failed when the bucket credentials are absent. The
+      # engine repositories that already publish had theirs set by hand, and
+      # until this one does the build should still go green and still produce
+      # downloadable artifacts — a missing secret is a setup step, not a broken
+      # build. It says so loudly in the summary so it cannot be mistaken for
+      # having published.
+      - name: Publish
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.SCW_OBJECT_STORAGE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SCW_OBJECT_STORAGE_SECRET_KEY }}
+          AWS_DEFAULT_REGION: fr-par
+        run: |
+          if [ -z "${AWS_ACCESS_KEY_ID}" ]; then
+            echo "::warning::SCW_OBJECT_STORAGE_ACCESS_KEY is not set on this \
+          repository — built but NOT published. Set the same pair \
+          sage-engine-server uses to turn this on."
+            echo "### Not published" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Object storage credentials are not set on this repository." \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          base="s3://${S3_BUCKET}/${ENGINES_PREFIX}/${ENGINE_ID}"
+          find incoming -name release.json | while read -r manifest; do
+            dir=$(dirname "$manifest")
+            version=$(python -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" "$manifest")
+            platform=$(python -c "import json,sys;print(json.load(open(sys.argv[1]))['platform'])" "$manifest")
+            archive=$(python -c "import json,sys;print(json.load(open(sys.argv[1]))['file'])" "$manifest")
+            target="${base}/${version}/${platform}"
+
+            # ARCHIVE FIRST, MANIFEST SECOND, and the order is the whole of it:
+            # the catalogue is composed from release.json, so publishing the
+            # manifest before the bytes it names would offer a download that
+            #404s for as long as the upload takes.
+            aws s3 cp "${dir}/${archive}" "${target}/${archive}" \
+              --endpoint-url "${S3_ENDPOINT}" --content-type application/zip
+            aws s3 cp "$manifest" "${target}/release.json" \
+              --endpoint-url "${S3_ENDPOINT}" --content-type application/json
+            echo "published ${ENGINE_ID} ${version} ${platform}"
+          done
+
+          # Last, and identical from every platform, so whichever writes it wins
+          # and they all agree.
+          aws s3 cp "incoming/engines/${ENGINE_ID}/identity.json" \
+            "${base}/identity.json" \
+            --endpoint-url "${S3_ENDPOINT}" --content-type application/json
