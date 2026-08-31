@@ -156,7 +156,27 @@ jobs:
           version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           python .github/describe_check.py "pack/${ENGINE_ID}/${version}/${{ matrix.exe }}"
 
+      # The layout gammonbase.com's catalogue reads: identity.json per engine,
+      # release.json plus a zip per version and platform. Building it here means
+      # publishing is an upload rather than a construction.
+      - name: Make the catalogue release
+        shell: bash
+        working-directory: engine
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          python .github/make_release.py \
+            --pack "pack/${ENGINE_ID}/${version}" \
+            --out release \
+            --id "${ENGINE_ID}" \
+            --name "PureTD" \
+            --description "Alexander Strehl's self-play network. Cubeless, one forward pass." \
+            --licence "MIT" \
+            --source-url "https://github.com/customation/puretd-engine" \
+            --version "${version}" \
+            --target "${{ matrix.target }}" \
+            --command "${{ matrix.exe }}"
+
       - uses: actions/upload-artifact@v4
         with:
           name: puretd-${{ matrix.target }}
-          path: engine/pack
+          path: engine/release
