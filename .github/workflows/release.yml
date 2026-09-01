@@ -62,13 +62,20 @@ jobs:
       # The gate: the C forward pass has to agree with the PyTorch one it was
       # exported from. A transposed matrix or a missed activation produces
       # plausible numbers for the wrong network, and this is what catches it.
+      #
+      # Several positions, and the expected values in a file rather than an
+      # argument, because one position was not enough: the opening has nothing
+      # on the bar and nothing borne off, so a layer mishandling those features
+      # agreed anyway. dump_parity_input.py picks the set and says why.
       - name: Check C and PyTorch agree
         working-directory: puretd/c_inference
         run: |
           gcc -O2 -o parity_check parity_check.c ../c_engine/bg_engine.c nn_eval.c \
               -I../c_engine -lm -Wall
-          expected=$(python dump_parity_input.py "../best_models/${MODEL}" parity_input.f32)
-          ./parity_check "${GITHUB_WORKSPACE}/puretd.bin" parity_input.f32 "${expected}"
+          python dump_parity_input.py "../best_models/${MODEL}" \
+              parity_input.f32 parity_expected.txt
+          ./parity_check "${GITHUB_WORKSPACE}/puretd.bin" \
+              parity_input.f32 parity_expected.txt
 
       - uses: actions/upload-artifact@v4
         with:
