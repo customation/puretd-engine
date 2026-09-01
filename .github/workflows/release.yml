@@ -79,6 +79,8 @@ jobs:
     name: ${{ matrix.target }}
     needs: weights
     runs-on: ${{ matrix.os }}
+    # The Apple signing credentials live here, restricted to main and v* tags.
+    environment: release
     strategy:
       fail-fast: false
       matrix:
@@ -154,6 +156,60 @@ jobs:
           JSON
           ls -l "${pack}"
           du -sh "${pack}"
+
+      # Signed BEFORE the archive is made, because what gets notarized is the
+      # zip and what Apple checks inside it is the signature on the binary.
+      # Signing afterwards would sign a file nobody runs.
+      #
+      # Only one file to sign: PureTD's C is compiled into the executable and
+      # wildbg is pure Rust, so unlike sage there is no separate library. The
+      # data files beside it — the weights, the nets — are not code and are not
+      # signed; the archive's digest is what protects them.
+      - name: Sign for macOS
+        if: startsWith(matrix.target, 'aarch64-apple') || startsWith(matrix.target, 'x86_64-apple')
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY KEYCHAIN_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is not set on the 'release' environment."
+              exit 1
+            fi
+          done
+
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          CERT="$RUNNER_TEMP/certificate.p12"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$CERT"
+          security import "$CERT" -P "$APPLE_CERTIFICATE_PASSWORD" -k "$KEYCHAIN" \
+            -T /usr/bin/codesign -f pkcs12
+          rm -f "$CERT"
+
+          # Without this, codesign blocks on a GUI prompt for keychain access
+          # that nobody can answer, and the job hangs until it times out.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          # Search order, not replacement: the system keychain still has to be
+          # reachable for the Apple intermediates.
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          BIN="pack/${ENGINE_ID}/${version}/${{ matrix.exe }}"
+          # --options runtime is Hardened Runtime, which notarization requires.
+          # --timestamp is a secure timestamp, also required: without it the
+          # signature stops verifying the day the certificate expires.
+          codesign --force --options runtime --timestamp \
+            --sign "$APPLE_SIGNING_IDENTITY" "$BIN"
+
+          # The exit code of codesign is not the answer to "is it signed".
+          codesign --verify --strict --verbose=2 "$BIN"
+          codesign --display --verbose=2 "$BIN" 2>&1 | grep -E "Authority|Timestamp|flags" || true
 
       # Proof the pack runs, not just that it built: describe over real BEP
       # framing, from the assembled directory, exactly as the app spawns it.
