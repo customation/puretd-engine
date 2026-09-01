@@ -193,9 +193,18 @@ jobs:
     name: Publish PureTD to object storage
     needs: pack
     runs-on: ubuntu-latest
-    # Only from master, and never from a pull request: a fork's PR must not be
+    # Only from main, and never from a pull request: a fork's PR must not be
     # able to write to the release bucket.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # THE BUCKET KEY IS AN ENVIRONMENT SECRET, not a repository one, and this
+    # line is what reaches it. These repositories are PUBLIC: a repository-level
+    # secret is readable by any workflow on any branch a collaborator can push,
+    # and this key writes to gammonbase-assets-prod — where the engine archives
+    # the app downloads AND EXECUTES are served from. Overwriting one is a
+    # supply-chain write, and on Windows and Linux there is no signature check
+    # to catch it. The environment restricts it to main and v* tags, the same
+    # protection the Apple signing credentials get.
+    environment: release
     steps:
       - uses: actions/checkout@v4
 
