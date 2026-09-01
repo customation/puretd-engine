@@ -167,6 +167,8 @@ jobs:
       # signed; the archive's digest is what protects them.
       - name: Sign for macOS
         if: startsWith(matrix.target, 'aarch64-apple') || startsWith(matrix.target, 'x86_64-apple')
+        shell: bash
+        working-directory: puretd-engine
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
