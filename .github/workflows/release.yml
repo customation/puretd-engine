@@ -86,10 +86,11 @@ jobs:
           - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,  exe: puretd-engine }
           - { os: windows-latest, target: x86_64-pc-windows-msvc,    exe: puretd-engine.exe }
           - { os: macos-latest,   target: aarch64-apple-darwin,      exe: puretd-engine }
-          # A real Intel runner, as sage-engine and gnubg-engine use. Better
-          # than cross-compiling from ARM: the binary can be executed on the
-          # host that built it, so the protocol check covers this platform too.
-          - { os: macos-15-intel, target: x86_64-apple-darwin,       exe: puretd-engine }
+          # NO macos-x86_64. pglite-oxide has no Apple-Intel ahead-of-time
+          # runtime, so the app starts there and cannot open its own database
+          # (local-cloud-parity.md). A platform that cannot store a match is
+          # not one to ship an engine for.
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, exe: puretd-engine }
     steps:
       - uses: actions/checkout@v4
         with:
