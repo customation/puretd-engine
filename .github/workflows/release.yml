@@ -14,7 +14,7 @@ name: Build engine packs
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -195,7 +195,7 @@ jobs:
     runs-on: ubuntu-latest
     # Only from master, and never from a pull request: a fork's PR must not be
     # able to write to the release bucket.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
 
