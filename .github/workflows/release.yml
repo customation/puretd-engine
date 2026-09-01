@@ -86,12 +86,10 @@ jobs:
           - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,  exe: puretd-engine }
           - { os: windows-latest, target: x86_64-pc-windows-msvc,    exe: puretd-engine.exe }
           - { os: macos-latest,   target: aarch64-apple-darwin,      exe: puretd-engine }
-          # Cross-compiled from the ARM runner rather than built on macos-13.
-          # Those runners are scarce enough that the job sat queued and was
-          # cancelled, and `needs: pack` then skips publishing — so a scarce
-          # runner silently blocked every release. Darwin-to-Darwin
-          # cross-compilation needs no extra linker.
-          - { os: macos-latest,   target: x86_64-apple-darwin,       exe: puretd-engine }
+          # A real Intel runner, as sage-engine and gnubg-engine use. Better
+          # than cross-compiling from ARM: the binary can be executed on the
+          # host that built it, so the protocol check covers this platform too.
+          - { os: macos-15-intel, target: x86_64-apple-darwin,       exe: puretd-engine }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -159,7 +157,6 @@ jobs:
       # Proof the pack runs, not just that it built: describe over real BEP
       # framing, from the assembled directory, exactly as the app spawns it.
       - name: Check the pack answers the protocol
-        if: matrix.target != 'x86_64-apple-darwin'
         shell: bash
         working-directory: engine
         run: |
