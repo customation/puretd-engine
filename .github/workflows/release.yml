@@ -81,6 +81,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     # The Apple signing credentials live here, restricted to main and v* tags.
     environment: release
+    # actions: write is what lets the macOS build switch the notarization
+    # poller on. Naming a permissions block makes it exhaustive — anything
+    # not listed is dropped — so contents: read is spelled out for the
+    # checkout it would otherwise lose.
+    permissions:
+      actions: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -168,7 +175,7 @@ jobs:
       - name: Sign for macOS
         if: startsWith(matrix.target, 'aarch64-apple') || startsWith(matrix.target, 'x86_64-apple')
         shell: bash
-        working-directory: puretd-engine
+        working-directory: engine
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -242,6 +249,91 @@ jobs:
             --target "${{ matrix.target }}" \
             --command "${{ matrix.exe }}"
 
+
+
+      # macOS does NOT publish from the publish job. It submits and walks away.
+      #
+      # Apple's notary queue cannot be waited out: sage's archives came back in
+      # 22 minutes once and ran past 80 on the same account the same day, and
+      # Apple documents 24-72 hours for anything that trips extended review. A
+      # job that blocks on that is a release that can be lost to it — notarytool
+      # exits, the runner is destroyed, Apple accepts an hour later and there is
+      # nothing left to publish.
+      #
+      # So: submit without waiting, stage the archive under a prefix the
+      # catalogue never reads, with the submission id beside it.
+      # complete-notarization.yml promotes it once Apple has answered, so twenty
+      # minutes and seventy-two hours become the same case.
+      - name: Submit for notarization and stage
+        if: startsWith(matrix.target, 'aarch64-apple') || startsWith(matrix.target, 'x86_64-apple')
+        shell: bash
+        working-directory: engine
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.SCW_OBJECT_STORAGE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SCW_OBJECT_STORAGE_SECRET_KEY }}
+          AWS_DEFAULT_REGION: fr-par
+        run: |
+          MANIFEST="$(find release -name release.json)"
+          DIR="$(dirname "$MANIFEST")"
+          VERSION="$(jq -r .version "$MANIFEST")"
+          PLATFORM="$(jq -r .platform "$MANIFEST")"
+          ARCHIVE="$(jq -r .file "$MANIFEST")"
+
+          KEY="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s' "$APPLE_API_KEY_P8" | base64 --decode > "$KEY"
+          trap 'rm -f "$KEY"' EXIT
+
+          LOG="$RUNNER_TEMP/notary.txt"
+          # No --wait. The submission is handed over and the job moves on.
+          xcrun notarytool submit "$DIR/$ARCHIVE" \
+            --key "$KEY" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" 2>&1 | tee "$LOG"
+
+          ID="$(grep -Eo '  id: [0-9a-f-]{36}' "$LOG" | head -1 | awk '{print $2}')"
+          if [ -z "$ID" ]; then
+            echo "::error::notarytool did not report a submission id; nothing was submitted"
+            exit 1
+          fi
+
+          # Built by adding to the manifest rather than by retyping it, so the
+          # poller publishes the digest taken of the archive that was actually
+          # signed and submitted, and composes no value of its own.
+          jq --arg id "$ID" --arg engine "$ENGINE_ID" --arg commit "$GITHUB_SHA" \
+             --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+             '. + {submissionId: $id, engineId: $engine, commit: $commit, submittedUtc: $at}' \
+             "$MANIFEST" > pending.json
+          cat pending.json
+
+          STAGE="s3://${S3_BUCKET}/staging/${ENGINES_PREFIX}/${ENGINE_ID}/${VERSION}/${PLATFORM}"
+          aws s3 cp "$DIR/$ARCHIVE" "$STAGE/$ARCHIVE" \
+            --endpoint-url "$S3_ENDPOINT" --content-type application/zip
+          aws s3 cp pending.json "$STAGE/pending.json" \
+            --endpoint-url "$S3_ENDPOINT" --content-type application/json
+
+          {
+            echo "### Submitted for notarization: $PLATFORM"
+            echo
+            echo "- submission id: \`$ID\`"
+            echo "- staged at: \`staging/${ENGINES_PREFIX}/${ENGINE_ID}/${VERSION}/${PLATFORM}/\`"
+            echo
+            echo "Not published yet. **Complete notarization** now polls hourly,"
+            echo "publishes it, then switches itself off again."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Strictly after staging: the poller must never wake to an empty bucket and
+      # conclude there is nothing to wait for. Idempotent, so every macOS entry
+      # in the matrix can run it without coordinating.
+      - name: Start the notarization poller
+        if: startsWith(matrix.target, 'aarch64-apple') || startsWith(matrix.target, 'x86_64-apple')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # NOT `|| true`. If this fails the archive sits in staging with nothing
+        # coming to publish it — a release that silently never lands. Better a
+        # red job that says so while the submission id is still on screen.
+        run: gh workflow enable complete-notarization.yml --repo "$GITHUB_REPOSITORY"
+
       - uses: actions/upload-artifact@v4
         with:
           name: puretd-${{ matrix.target }}
@@ -303,6 +395,16 @@ jobs:
             platform=$(python -c "import json,sys;print(json.load(open(sys.argv[1]))['platform'])" "$manifest")
             archive=$(python -c "import json,sys;print(json.load(open(sys.argv[1]))['file'])" "$manifest")
             target="${base}/${version}/${platform}"
+
+            # macOS is staged for notarization, not published here.
+            # complete-notarization.yml promotes it once Apple has answered;
+            # publishing it now would offer a download Gatekeeper refuses.
+            case "$platform" in
+              macos-*)
+                echo "skipping ${platform}: awaiting notarization"
+                continue
+                ;;
+            esac
 
             # ARCHIVE FIRST, MANIFEST SECOND, and the order is the whole of it:
             # the catalogue is composed from release.json, so publishing the
